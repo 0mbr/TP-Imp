@@ -1,0 +1,9 @@
+var globulus_mamulus;
+
+function main(args) {
+  var i;
+
+  globulus_mamulus = 3;
+  i = globulus_mamulus;
+}
+

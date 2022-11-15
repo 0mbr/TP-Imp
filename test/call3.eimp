@@ -1,0 +1,20 @@
+function main {
+1 params
+0 locals
+  $t2 <- 10;
+  $t3 <- 5;
+  push $t2;
+  call mul;
+  pop 1;
+  $t3 <- $v0;
+}
+
+function mul {
+1 params
+0 locals
+  $t0 <- *[1];
+  $t2 <- $t0(+7);
+  $v0 <- $t2;
+  return;
+}
+

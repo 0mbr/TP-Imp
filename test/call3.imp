@@ -1,0 +1,13 @@
+function main(args) {
+  var i;
+  var j;
+
+  j = 10;
+  i = 5;
+
+  i = add(j, i);
+}
+
+function add(i, j) {
+  return i + j;
+}

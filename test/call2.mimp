@@ -1,0 +1,16 @@
+function main(args) {
+  var i;
+  var j;
+
+  j = 10;
+  i = 5;
+  while ((i < j)) {
+    i = incr(i);
+    putchar((i(+48)));
+  }
+}
+
+function incr(i) {
+  return((i(+1)));
+}
+

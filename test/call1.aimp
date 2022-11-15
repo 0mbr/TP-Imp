@@ -1,0 +1,17 @@
+function main(args) {
+  var i;
+
+  i <- 2; {4}
+  push i; {1}
+  call incr (1); {2}
+  i <- $v0; {3}
+}
+
+function incr(i) {
+  var #0;
+
+  #0 <- i(+1); {5}
+  $v0 <- #0; {6}
+  return; {7}
+}
+

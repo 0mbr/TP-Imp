@@ -1,0 +1,8 @@
+
+function main(args) {
+  var i;
+
+  i = 65 + 28;
+
+  putchar(i);
+}

@@ -1,0 +1,11 @@
+var globulus_mamulus;
+
+function main {
+1 params
+0 locals
+  $t2 <- 3;
+  *globulus_mamulus <- $t2;
+  $t2 <- *globulus_mamulus;
+  $t2 <- $t2;
+}
+

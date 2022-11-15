@@ -1,0 +1,11 @@
+function main(args) {
+  var i;
+  var j;
+
+  i = 2;
+  j = 3;
+  i = (i(+1));
+  j = (i + j);
+  i = (i < 1);
+}
+

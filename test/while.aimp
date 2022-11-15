@@ -1,0 +1,18 @@
+function main(args) {
+  var #0;
+  var i;
+  var j;
+  var z;
+
+  i <- 10; {7}
+  j <- 0; {6}
+  while (
+    #0 <- j < i; {2}
+    #0
+  ) {
+    j <- j(+1); {4}
+    z <- i + j; {3}
+  } {5}
+  z <- j; {1}
+}
+

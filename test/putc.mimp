@@ -1,0 +1,7 @@
+function main(args) {
+  var i;
+
+  i = 93;
+  putchar(i);
+}
+

@@ -1,0 +1,11 @@
+function main(args) {
+  var i;
+
+  i = 2;
+  i = incr(i);
+}
+
+function incr(i) {
+  return((i(+1)));
+}
+

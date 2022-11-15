@@ -1,0 +1,27 @@
+function main {
+1 params
+0 locals
+  $t3 <- 10;
+  $t4 <- 5;
+  while (
+    $t2 <- $t4 < $t3;
+    $t2
+  ) {
+    push $t4;
+    call incr;
+    pop 1;
+    $t4 <- $v0;
+    $t2 <- $t4(+48);
+    putchar $t2;
+  }
+}
+
+function incr {
+1 params
+0 locals
+  $t0 <- *[1];
+  $t2 <- $t0(+1);
+  $v0 <- $t2;
+  return;
+}
+
