@@ -1,33 +1,33 @@
 (**
+    /[...]/ <=> pas réalisé à cette étape
+    x       <=> pas réalisé
+    o       <=> réalisé
+
    La traduction de MIMP vers AIMP réalise deux tâches principales
-   - explosion des expressions en séquences d'instructions atomiques,
+   o explosion des expressions en séquences d'instructions atomiques,
      en introduisant au passage des registres virtuels pour stocker les
      résultats intermédiaires des calcules
-   - implémentation des conventions de passage des paramètres et résultats
-     des fonctions, ainsi que des conventions de sauvegarde des registres
-     physiques
+   o implémentation des conventions de passage des paramètres et résultats
+     des fonctions, /ainsi que des conventions de sauvegarde des registres
+     physiques/
 
    Conventions à réaliser :
-   - pour la transmission des résultats : registre $v0
-   - pour le passage des paramètres, AU CHOIX
-     * soit tout sur la pile (premier paramètre au sommets, les suivante
+   o pour la transmission des résultats : registre $v0
+   o pour le passage des paramètres, AU CHOIX
+     x soit tout sur la pile (premier paramètre au sommets, les suivante
        en progressant vers l'intérieur de la pile)
-     * soit les quatre premiers dans les $ai, puis les suivants sur la
+     o soit les quatre premiers dans les $ai, puis les suivants sur la
        pile
-   - lors d'un appel de fonction, l'appelant doit gérer la sauvegarde des
+   - /lors d'un appel de fonction, l'appelant doit gérer la sauvegarde des
      registres $ti, $ai et $v0, et l'appelé doit gérer la sauvegarde des
-     registres $si
+     registres $si/
 
-   La création des registres virtuels est faite indépendamment pour chaque
+   o La création des registres virtuels est faite indépendamment pour chaque
    fonction. Dans une fonction donnée, les registres virtuels sont vus
    comme des variables locales.
  *)
 
 open Aimp
-
-let popr r =
-  (* Retourne la séquence qui Pop le haut de la pile dans r *)
-  Nop ++ Read(r, "$sp") ++ Pop(1)
 
 (* Traduction directe *)
 let tr_unop = function
@@ -50,82 +50,126 @@ let tr_fdef fdef =
     let name = Printf.sprintf "#%i" !counter in
     vregs := name :: !vregs;
     incr counter;
-    name
+    Virtual name
   in
 
-  let local r = List.mem r !vregs in
-  let param r = List.mem r fdef.params in
-  let global r = not (local r) && not (param r) in
+  let mem_local r = List.mem r (!vregs) in
+  let mem_param r = List.mem r (fdef.params) in
+
+  (* Fonctions de traduction d'un paramètre : on abstrait le registre
+     et la séquence résultants *)
+  let tr_param x: reg * sequence = 
+    let ip = Tools.index (fdef.params) x in
+    (* Les registres des paramètres peuvent être réels ou virtuels. *)
+    if ip < 4 then 
+      Aimp.to_real "a" ip, Nop 
+    else 
+      Aimp.Virtual(x), Nop
+  in
 
   (* Fonction de traduction des expressions.
      Renvoie une paire (r, s) d'une séquence s et du nom r du registre
      virtuel contenant la valeur de l'expression. *)
-  let rec tr_expr = function
+  let rec tr_expr e: reg * sequence = match e with
     | Mimp.Cst n ->
-      let r = new_vreg() in r, Nop ++ Cst(r, n)
+      let r = new_vreg() in 
+      r, Nop ++ Cst(r, n)
+
     | Mimp.Bool b -> 
       let r = new_vreg() in 
       let n = if b then 1 else 0 in
       r, Nop ++ Cst(r, n)
+
     | Mimp.Var x ->
-      (* Il faut distinguer ici entre variables locales, paramètres et
-          variables globales. TODO ? *)
-      if local x then
+      if mem_local x then
         (* On considère que les variables sont déjà des vregs *)
-        x, Nop
-      else if global x then
-        let r = new_vreg() in r, Nop ++ Read(r, x)
-      else if param x then
-        x, Nop
+        Virtual(x), Nop
+      else if mem_param x then
+        let r, s = tr_param x in
+        r, s
       else
-        failwith "damn son"
+      (* le registre est global *)
+        let r = new_vreg() in 
+        r, Nop ++ Read(r, x)
+
     | Mimp.Unop(op, e) ->
       let r1, s1 = tr_expr e in
       let r = new_vreg() in
       r, s1 ++ Unop(r, tr_unop op, r1)
+
     | Mimp.Binop(op, e1, e2) ->
       let r1, s1 = tr_expr e1 in
       let r2, s2 = tr_expr e2 in
       let r = new_vreg() in
       r, s1 @@ s2 ++ Binop(r, tr_binop op, r1, r2)
+
     | Mimp.Call(f, args) ->
       (* Il faut réaliser ici la convention d'appel : passer les arguments
         de la bonne manière, et renvoyer le résultat dans $v0. *)
-      let sarg = List.fold_left (fun sarg e -> let r, s = tr_expr e in sarg @@ s ++ Push(r)) Nop args in
-      "$v0", sarg ++ Call(f, List.length args)
+      let counter = ref 0 in
+      let sarg = List.fold_left 
+        (fun sarg e ->
+          incr counter;
+          let r, s = tr_expr e in
+          if !counter - 1 < Mips.pmax then
+            sarg @@ s ++ Move(to_real "a" (!counter - 1), r)
+          else
+            sarg @@ s ++ Push(r))
+        Nop 
+        args
+      in
+      Real("$v0"), 
+      Nop 
+      (* ATTENTION, dépendant de l'implementation de call dans aimp2eimp et eimp2mips*)
+      ++ Call(Mips.lab_callers_save, 0) 
+      @@ sarg 
+      ++ Call(f, List.length args)
+      (* ATTENTION, dépendant de l'implementation de call dans aimp2eimp et eimp2mips*)
+      ++ Call(Mips.lab_callers_restore, 0)
   in
 
-  let rec tr_instr = function
+  let rec tr_instr inst: sequence = match inst with
     | Mimp.Putchar e ->
       let r, s = tr_expr e in
       s ++ Putchar r
+
     | Mimp.Set(x, e) ->
-      if local x then 
-        match e with
-        | Cst n -> 
-            Nop ++ Cst(x, n)
-        | Binop(op, e1, e2) ->
-            let r1, s1 = tr_expr e1 in let r2, s2 = tr_expr e2 in
-            s1 @@ s2 ++ Binop(x, tr_binop op, r1, r2)
-        | Unop(Addi n, e) ->
-            let r, s = tr_expr e in
-            s ++ Unop(x, Addi n, r)
-        | _ -> 
-            let r, s = tr_expr e in s ++ Move(x, r)
-      else if global x then
-        let r, s = tr_expr e in s ++ Write(x, r)
-      else if param x then
-        let r, s = tr_expr e in s ++ Move(x, r)
-      else
-        failwith "damn son"
+      (* Petite ruse ici, rien de méchant : on sait que seul les globales 
+         retournent une séquence <> Nop et en plus on obtient la bonne
+         traduction de la variable *)
+      let r', s' = tr_expr (Mimp.Var x) in
+      (match r', s' with
+        | Virtual x, Nop (* local ou param *) | Real x, Nop (* param *) ->  
+          (match e with
+            | Cst n -> 
+              Nop ++ Cst(r', n)
+            | Binop(op, e1, e2) ->
+              let r1, s1 = tr_expr e1 in 
+              let r2, s2 = tr_expr e2 in
+              s1 @@ s2 ++ Binop(r', tr_binop op, r1, r2)
+            | Unop(Addi n, e) ->
+              let r, s = tr_expr e in
+              s ++ Unop(r', Addi n, r)
+            | _ -> 
+              let r, s = tr_expr e in 
+              s ++ Move(r', r))
+        | _, _ -> (* global *)
+          let r, s = tr_expr e in 
+          s ++ Write(x, r))
+
     | Mimp.If(e, s1, s2) ->
-        let r, s = tr_expr e in s ++ If(r, tr_seq s1, tr_seq s2)
+      let r, s = tr_expr e 
+      in s ++ If(r, tr_seq s1, tr_seq s2)
     | Mimp.While(e, s) ->
-        let r, s' = tr_expr e in Nop ++ While(s', r, tr_seq s)
+      let r, s' = tr_expr e in 
+      Nop ++ While(s', r, tr_seq s)
     | Mimp.Return e ->
-       let r, s = tr_expr e in s ++ Move("$v0", r) ++ Return
+      let r, s = tr_expr e in 
+      s ++ Move(Real("$v0"), r) ++ Return
     | Mimp.Expr e ->
-       let r, s = tr_expr e in s
+      let r, s = tr_expr e in 
+      s
+
   and tr_seq = function
     | []     -> Nop
     | i :: s -> tr_instr i @@ tr_seq s

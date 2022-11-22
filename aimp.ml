@@ -18,26 +18,42 @@
 type unop = Addi of int
 type binop = Add | Mul | Lt
 
-(* Un registre virtuel est, comme une variable, identifié par une chaîne *)
-type vreg = string
+(* Un registre est, comme une variable, identifié par une chaîne *)
+type reg =
+  | Virtual of string
+  | Real    of string
+
+let rname = function
+  | Virtual x | Real x -> x
+let compare r1 r2 = String.compare (rname r1) (rname r2)
+
+let to_real     r i = Real(Printf.sprintf "$%s%i" r i)
+let to_virtual  x   = Virtual x
+let to_reals    l   = List.fold_right (fun x rl -> Real   (x) :: rl) l []
+let to_virtuals l   = List.fold_right (fun x rl -> Virtual(x) :: rl) l []
+
+module Register = struct
+  type t = reg
+  let compare = compare
+end
 
 (* Il n'y a plus d'expressions. On accède au résultat d'un calcul par un
    registre virtuel. Une instruction qui "produit" un résultat le stocke
    dans un registre virtuel, qui est systématiquement le premier des
    paramètres de l'instruction. *)
 type instruction =
-  | Putchar of vreg
+  | Putchar of reg
   (* Lecture de la valeur d'une variable ou d'un paramètre *)
-  | Read    of vreg * string
+  | Read    of reg * string
   (* Mutation d'une variable *)
-  | Write   of string * vreg
+  | Write   of string * reg
   (* Transfert entre deux registres virtuels *)
-  | Move    of vreg * vreg
+  | Move    of reg * reg
   (* Chargement d'une valeur constante *)
-  | Cst     of vreg * int
+  | Cst     of reg * int
   (* Opérations arithmétiques *)
-  | Unop    of vreg * unop * vreg
-  | Binop   of vreg * binop * vreg * vreg
+  | Unop    of reg * unop * reg
+  | Binop   of reg * binop * reg * reg
   (* Appel de fonction. On ne donne pas de registre virtuel pour le
      résultat car, par convention, le résultat doit être placé dans $v0.
      On ne donne pas non plus de paramètres car, par convention, ils doivent
@@ -48,15 +64,15 @@ type instruction =
   (* Instructions supplémentaires pour réaliser les conventions d'appel :
      ajout d'un élément au sommet de la pile, et retrait de n éléments de
      la pile. *)
-  | Push    of vreg
+  | Push    of reg
   | Pop     of int
   (* Fin d'exécution d'une fonction. La valeur renvoyée doit être placée
      dans $v0 avant d'exécuter cette instruction. *)
   | Return
   (* Les structures de contrôles sont toujours présentes.
      Attention, le test est fait sur un registre virtuel. *)
-  | If      of vreg * sequence * sequence
-  | While   of sequence * vreg * sequence
+  | If      of reg * sequence * sequence
+  | While   of sequence * reg * sequence
 (* Pour éviter un surcoût lié aux concaténations de code, on donne aux
    séquences d'instruction une structure arborescente. Pour les besoins
    de la suite, chaque instruction est numérotée. *)
@@ -121,30 +137,32 @@ let pp_program prog out_channel =
     | x::vars -> pp_var x; pp_vars vars
   in
 
+
   let pp_function fdef =
+    let tr_reg = function Virtual vr -> vr | Real rr -> rr in
     let rec pp_instr = function
       | Putchar vr ->
-         print "putchar %s;" vr
+         print "putchar %s;" (tr_reg vr)
       | Read(vrd, x) ->
-         print "%s +- *%s;" vrd x
+         print "%s +- *%s;" (tr_reg vrd) x
       | Write(x, vr) ->
-         print "*%s <- %s;" x vr
+         print "*%s <- %s;" x (tr_reg vr)
       | Move(vrd, vr) ->
-         print "%s <- %s;" vrd vr
+         print "%s <- %s;" (tr_reg vrd) (tr_reg vr)
       | Cst(vrd, n) ->
-         print "%s <- %i;" vrd n
+         print "%s <- %i;" (tr_reg vrd) n
       | Unop(vrd, Addi n, vr) ->
-         print "%s <- %s(+%i);" vrd vr n
+         print "%s <- %s(+%i);" (tr_reg vrd) (tr_reg vr) n
       | Binop(vrd, op, vr1, vr2) -> 
-         print "%s <- %s %s %s;" vrd vr1 (pp_binop op) vr2
+         print "%s <- %s %s %s;" (tr_reg vrd) (tr_reg vr1) (pp_binop op) (tr_reg vr2)
       | Call(f, n) ->
          print "call %s (%i);" f n
       | Push vr ->
-         print "push %s;" vr
+         print "push %s;" (tr_reg vr)
       | Pop n ->
          print "pop %i;" n
       | If(vr, s1, s2) ->
-         print "if (%s) {\n" vr;
+         print "if (%s) {\n" (tr_reg vr);
          incr margin; pp_seq s1; decr margin;
          print_margin(); print "} else {\n";
          incr margin; pp_seq s2; decr margin;
@@ -152,7 +170,7 @@ let pp_program prog out_channel =
       | While(s1, vr, s2) ->
          print "while (\n";
          incr margin; pp_seq s1;
-         print_margin(); print "%s\n" vr;
+         print_margin(); print "%s\n" (tr_reg vr);
          decr margin;
          print_margin(); print ") {\n";
          incr margin; pp_seq s2; decr margin;

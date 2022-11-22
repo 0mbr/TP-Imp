@@ -39,14 +39,18 @@ let tr_fdef fdef =
   (* Renvoie l'éventuelle instruction nécessaire pour sauvegarder un résultat
      ou aller chercher un opérande dans la pile, en fonction de la réalisation
      du registre virtuel correspondant. *)
-  let save vr = match Graph.VMap.find_opt vr alloc with
-    | None      -> Printf.printf "reg %s not found, stays unchanged.\n" vr; Nop
+  let save vr = 
+    let vr = Aimp.rname vr in
+    match Graph.VMap.find_opt vr alloc with
+    | None -> Printf.printf "reg %s not found, stays unchanged.\n" vr; Nop
     | Some (Actual r)  -> Nop
     | Some (Stacked i) -> Instr(Write(Stack(-i-2), dst_reg))
     | Some (Param i)   -> Instr(Write(Param(i+1), dst_reg))
   in
-  let load op vr = match Graph.VMap.find_opt vr alloc with
-    | None      -> Printf.printf "reg %s not found, stays unchanged.\n" vr; Nop
+  let load op vr = 
+    let vr = Aimp.rname vr in
+    match Graph.VMap.find_opt vr alloc with
+    | None -> Printf.printf "reg %s not found, stays unchanged.\n" vr; Nop
     | Some (Actual r)  -> Nop
     | Some (Stacked i) -> Instr(Read(op, Stack(-i-2)))
     | Some (Param i)   -> Instr(Read(op, Param(i+1)))
@@ -57,8 +61,10 @@ let tr_fdef fdef =
      aller chercher un opérande, selon que le registre virtuel correspondant a
      été réalisé par un registre physique ou dans la pile. Dans ce dernier cas,
      le registre sera l'un des deux registres dédiés $t0 ou $t1. *)
-  let reg op vr = match Graph.VMap.find_opt vr alloc with
-    | None      -> Printf.printf "reg %s not found, stays unchanged.\n" vr; vr
+  let reg op vr = 
+    let vr = Aimp.rname vr in
+    match Graph.VMap.find_opt vr alloc with
+    | None -> Printf.printf "reg %s not found, stays unchanged.\n" vr; vr
     | Some (Actual r)  -> r
     | Some (Stacked i) -> op
     | Some (Param i)   -> op
@@ -82,16 +88,13 @@ let tr_fdef fdef =
       load1 vr 
       @@ Instr(Write(Global(x), op1 vr))
     | Aimp.Move(vrd, vr) ->
-      
-      Printf.printf "reg %s dans %s\n" vr vrd;
       load2 vr 
       @@ Instr(Move(dst vrd, op2 vr)) 
       @@ save vrd
     | Aimp.Push vr ->
        load1 vr
        @@ Instr(Push(op1 vr))
-    | Aimp.Pop n ->
-       Instr(Pop(n))
+    | Aimp.Pop n -> Instr(Pop(n))
     | Aimp.Cst(vrd, n) ->
        Instr(Cst(dst vrd, n))
        @@ save vrd
@@ -103,18 +106,14 @@ let tr_fdef fdef =
       load1 vr1 @@ load2 vr2
       @@ Instr(Binop(dst vrd, tr_binop op, op1 vr1, op2 vr2))
       @@ save vrd
-    | Aimp.Call(f, n) ->
-
-      Instr(Call(f)) 
-      @@ Instr(Pop(n)) (* Restauration des arguments. *)
+    | Aimp.Call(f, n) -> Instr(Call(f)) 
     | Aimp.If(vr, s1, s2) ->
       Instr(If(dst vr, tr_seq s1, tr_seq s2)) 
       @@ save vr
     | Aimp.While(s1, vr, s2) ->
       Instr(While(tr_seq s1, dst vr, tr_seq s2))
       @@ save vr
-    | Aimp.Return ->
-       Instr(Return)
+    | Aimp.Return -> Instr(Return)
 
   and tr_seq = function
     | Aimp.Seq(s1, s2) -> Seq(tr_seq s1, tr_seq s2)

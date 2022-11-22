@@ -20,18 +20,67 @@
      la main.
  *)
 
+(* Type pour l'assertion d'utilisation d'un registre dans une fonction *)
+module SMap = Map.Make(String)
+module VSet = Set.Make(String)
+
 open Eimp
 open Mips
 
 let push r = sw r 0 sp @@ subi sp sp 4
-
-let temp_real_regs = [Mips.t2; Mips.t3; Mips.t4; Mips.t5; Mips.t6; Mips.t7; Mips.t8; Mips.t9; Mips.s0];;
+let pop  r = lw r 0 sp @@ addi sp sp 4
 
 (* Fonction de création de nouvelles étiquettes, à utiliser notamment pour
    traduire les boucles et les branchements. *)
 let new_label =
   let count = ref 0 in
   fun () -> incr count; Printf.sprintf "__lab_%i" !count
+
+let push_regs reglist offset =
+  let n = List.length reglist in
+  let seq, _ = List.fold_left 
+    (fun (seq, i) r -> (seq @@ sw r (-(i+offset)*4) sp), (i+1)) 
+    (Nop, 0) reglist
+  in 
+  seq @@ subi sp sp (4*(n+offset))
+
+let pop_regs reglist offset =
+  let n = List.length reglist in
+  let seq, _ = List.fold_right 
+    (fun r (seq, i) -> (seq @@ lw r ((i+offset)*4) sp), (i+1)) 
+    reglist (Nop, 0) 
+  in 
+  seq @@ addi sp sp (4*(n+offset))
+
+let seq_jump_save_callees = 
+  sw ra (-4*(List.length callee_saved)) sp 
+  @@ jal lab_callees_save    
+  @@ lw ra 0 sp
+
+let seq_jump_save_callers = 
+  sw ra (-4*(List.length caller_saved)) sp 
+  @@ jal lab_callers_save    
+  @@ lw ra 0 sp
+
+let seq_jump_restore_callees = 
+  sw ra (-4) sp
+  @@ jal lab_callees_restore    
+  @@ lw ra (-(4*(List.length callee_saved) + 4)) sp
+
+let seq_jump_restore_callers = 
+  sw ra (-4) sp
+  @@ jal lab_callers_restore    
+  @@ lw ra (-(4*(List.length caller_saved) + 4)) sp 
+
+let seq_save_callees    = label lab_callees_save    @@ push_regs callee_saved 0 @@ jr ra
+let seq_restore_callees = label lab_callees_restore @@ pop_regs  callee_saved 0 @@ jr ra
+let seq_save_callers    = label lab_callers_save    @@ push_regs caller_saved 0 @@ jr ra
+let seq_restore_callers = label lab_callers_restore @@ pop_regs  caller_saved 0 @@ jr ra
+
+(*let seq_save_callees2    = push_regs callee_saved 0
+let seq_restore_callees2 = pop_regs  callee_saved 0
+let seq_save_callers2    = push_regs caller_saved 0
+let seq_restore_callers2 = pop_regs  caller_saved 0*)
 
 (**
    Fonction de traduction d'une fonction.
@@ -60,7 +109,16 @@ let tr_fdef fdef =
     | Binop(rd, Add, r1, r2) -> add rd r1 r2
     | Binop(rd, Mul, r1, r2) -> mul rd r1 r2
     | Binop(rd, Lt, r1, r2)  -> slt rd r1 r2
-    | Call(f)            -> jal f
+    | Call(f) -> 
+      if f = lab_callers_save then
+        seq_jump_save_callers
+      else if f = lab_callers_restore then
+        seq_jump_restore_callers
+      else 
+        let n = fdef.params in
+        let clean_args_seq = if n <= pmax then Nop 
+                            else addi sp sp (4*n) in
+        jal f @@ clean_args_seq
     | If(r, s1, s2) -> let true_label = new_label() in 
                        let end_label = new_label() in
                        bnei r 0 true_label 
@@ -92,22 +150,18 @@ let tr_fdef fdef =
   push fp
   @@ push ra
   @@ addi fp sp 8
-  @@ sw "$t2" 0 sp @@ sw "$t3" (-4) sp @@ sw "$t4" (-8) sp @@ sw "$t5" (-12) sp 
-  @@ sw "$t6" (-16) sp @@ sw "$t7" (-20) sp @@ sw "$t8" (-24) sp @@ sw "$t9" (-28) sp
-  @@ addi sp sp (-32)
-  @@ addi sp sp (-4 * fdef.locals)
+  @@ seq_jump_save_callees
+  @@ subi sp sp (4 * fdef.locals)
 
   @@ tr_seq fdef.code
 
   @@ label return_label
-  (*@@ li t0 0*)
-  @@ move sp fp
-  @@ lw "$t2" (-8) sp @@ lw "$t3" (-12) sp @@ lw "$t4" (-16) sp @@ lw "$t5" (-20) sp 
-  @@ lw "$t6" (-24) sp @@ lw "$t7" (-28) sp @@ lw "$t8" (-32) sp @@ lw "$t9" (-36) sp
-  @@ lw ra (-4) fp
-  @@ lw fp 0 fp
+  @@ subi sp fp (8 + 4*(List.length callee_saved)) (* on retourne au niveau des callee saved pour les restaurer *)
+  @@ seq_jump_restore_callees
+  @@ addi sp fp 4 (* sp pointe sur le dernier caller-saved ou argument enregistré *)
+  @@ lw ra (-8) sp
+  @@ lw fp (-4) sp
   @@ jr ra
-
 
 (**
    Fonction principale, de traduction d'un programme entier.
@@ -133,9 +187,8 @@ let tr_prog prog =
          subi sp sp 4
        dans le cas où tous passent par la pile.
      *)
-    @@ sw v0 0 sp
-    @@ subi sp sp 4
-    (* Choix : ici, on a sélectionné la version passant par la pile. *)
+    @@ move a0 v0
+    (* Choix : ici, on a sélectionné la version passant par registres. *)
     @@ jal "main"
     (* Après l'exécution de la fonction "main", appel système de fin de
        l'exécution. *)
@@ -162,6 +215,12 @@ let tr_prog prog =
     @@ syscall
     @@ label "atoi_end"
     @@ jr   ra
+  and routines =
+    comment "callees and callers -saved routines" 
+    @@ seq_save_callees
+    @@ seq_restore_callees
+    @@ seq_save_callers
+    @@ seq_restore_callers
   in
 
   (**
@@ -172,7 +231,7 @@ let tr_prog prog =
       label fdef.name @@ tr_fdef fdef @@ code)
     prog.functions nop
   in
-  let text = init @@ function_codes @@ built_ins
+  let text = init @@ function_codes @@ routines @@ built_ins
   and data = List.fold_right
     (fun id code -> label id @@ dword [0] @@ code)
     prog.globals nop

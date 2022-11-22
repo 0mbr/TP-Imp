@@ -31,6 +31,35 @@ let fp : register = "$fp"
 let gp : register = "$gp"
 let zero : register = "$zero"
 
+(* Listes des registres réels et des registres temporaires réels utilisés
+   pour stocker des variabels temporaires. On a aligné real_regs et temp_regs
+   Pour faciliter l'attribution de couleurs lors de l'allocation de registre. *)
+let real_regs    = [t2; t3; t4; t5; t6; t7; t8; t9; s0; s1; s2; s3; s4; s5; s6; s7; a0; a1; a2; a3; t0; t1; v0; v1; ra; sp; fp; gp; zero];;
+let temp_regs    = [t2; t3; t4; t5; t6; t7; t8; t9; s0; s1; s2; s3; s4; s5; s6; s7                                                      ];;
+
+let caller_saved = [t2; t3; t4; t5; t6; t7; t8; t9;                                 a0; a1; a2; a3;         v0                          ];;
+let callee_saved = [                                s0; s1; s2; s3; s4; s5; s6; s7                                                      ];;
+
+(* Nombre de registre maximum qu'on peut allouer lors de l'étape d'allocation de registres *)
+let kmax = List.length temp_regs
+(* Nombre de registres utilisés dans l'appel de fonction comme conteneurs de paramètres *)
+let pmax = 4
+
+let lab_callees_save    = "__lab_save_callees"
+let lab_callees_restore = "__lab_restore_callees"
+let lab_callers_save    = "__lab_save_callers"
+let lab_callers_restore = "__lab_restore_callers"
+
+(** Fonction pour calculer k et les registres disponibles pour la coloration
+    en fonction du nombre de paramètres *)
+let cp_k_temp_regs (nparam: int): int * (string list) =
+  let rec pop_n n l = match l with
+    | [] -> []
+    | h :: t when n <= 0 -> h :: t
+    | _ :: t when n >  0 -> pop_n (n-1) (t)
+  in
+  (kmax - nparam), (pop_n nparam temp_regs)
+
 let (~$) r = r
 
 type label = string

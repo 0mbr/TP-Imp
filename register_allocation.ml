@@ -33,19 +33,9 @@
    partager une même réalisation.
  *)
 
- open Aimp
- open Graph
- 
- module VSet = Set.Make(String)
-
-(* Tout les registres réels *)
-let real_regs      = VSet.of_list[Mips.v0; Mips.v1; Mips.a0; Mips.a1; Mips.a2; Mips.a3; Mips.t0; Mips.t1; Mips.t2; Mips.t3; Mips.t4; Mips.t5; Mips.t6; Mips.t7; Mips.t8; Mips.t9; Mips.s0; Mips.s1; Mips.s2; Mips.s3; Mips.s4; Mips.s5; Mips.s6; Mips.s7; Mips.ra; Mips.sp; Mips.fp; Mips.gp; Mips.zero];;
-(* Les registres réels qu'on vas utiliser *)
-let temp_real_regs = [Mips.t2; Mips.t3; Mips.t4; Mips.t5; Mips.t6; Mips.t7; Mips.t8; Mips.t9];;
-(* Fonctions d'évaluation d'appartenance aux registres réels *)
-let real  r = VSet.mem r real_regs
-let nreal r = not (real r)
- 
+open Aimp
+open Graph
+  
  (**
     1/ Analyse de vivacité.
     En un point de programme donné, ont dit qu'une variable est
@@ -83,7 +73,7 @@ let nreal r = not (real r)
       sont vivantes en sortie. Rappel : en AIMP, chaque instruction
       atomique est identifiée par un numéro unique, que l'on utilise ici
       comme clé dans la table. *)
-   let (liveness: (int, VSet.t) Hashtbl.t) = Hashtbl.create 64 in
+   let (liveness: (int, RSet.t) Hashtbl.t) = Hashtbl.create 64 in
    
    (** Calcul de vivacité pour une séquence.
  
@@ -95,7 +85,7 @@ let nreal r = not (real r)
  
        Effet de bord : met à jour la table [liveness] pour toutes les
        instructions de la séquence. *)
-   let rec sequence (s: sequence) (out: VSet.t): VSet.t = match s with
+   let rec sequence (s: sequence) (out: RSet.t): RSet.t = match s with
      | Nop -> out
      | Instr(n, i) ->
         Hashtbl.replace liveness n out; (* mise à jour par effet de bord *)
@@ -117,28 +107,28 @@ let nreal r = not (real r)
       Effet de bord : du fait d'appels à [sequence] dans les cas des branchements
       et des boucles, met à jour la table [liveness] pour toutes les 
       sous-instructions de [i]. *)
-   and instr (i: instruction) (out: VSet.t): VSet.t = match i with
+   and instr (i: instruction) (out: RSet.t): RSet.t = match i with
      | Write(_, r) ->
         (* Écriture dans une variable globale : le registre virtuel [r] est lu,
            et aucun registre n'est modifié. On ne fait donc qu'ajouter [r] aux
            registres vivants. *)
-        VSet.add r out
+        RSet.add r out
      | Read(rd, _) | Cst(rd, _) -> 
         (* Lecture d'une variable globale, ou chargement d'une constante :
            aucun registre virtuel n'est lu, et un registre [rd] de destination
            est modifié. Le registre [rd] n'est donc pas vivant en entrée. *)
-        VSet.remove rd out
+        RSet.remove rd out
      | Putchar r ->
         (* Attention : réaliser putchar en MIPS nécessite d'écrire dans les
            registres réels $a0 et $v0. *)
-        VSet.union (VSet.of_list [Mips.a0; Mips.v0]) out
+        RSet.union (RSet.of_list [Aimp.Real(Mips.a0); Aimp.Real(Mips.v0)]) out
      | Move(rd, r) | Unop(rd, _, r) -> 
         (* Le registre [r] est lu, le registre [rd] est modifié. *)
-        VSet.add r (VSet.remove rd out)
+        RSet.add r (RSet.remove rd out)
      | Binop(rd, _, r1, r2) -> 
-        VSet.union (VSet.of_list [r1; r2]) (VSet.remove rd out)
+        RSet.union (RSet.of_list [r1; r2]) (RSet.remove rd out)
      | Push r ->
-        VSet.add r out
+        RSet.add r out
      | Pop _ ->
         out
      | Call(_, n) ->
@@ -153,20 +143,22 @@ let nreal r = not (real r)
            - les registres $ai
            - le registre $v0
          *)
-        out
+        let nparams = min (List.length fdef.params) Mips.pmax in
+        let read_regs = RSet.of_list (List.init nparams (fun i -> Real(Printf.sprintf "$a%i" i))) in
+        let def_regs  = RSet.of_list (Aimp.to_reals Mips.caller_saved) in
+        RSet.union (RSet.diff out def_regs) read_regs
      | Return ->
         (* Rappel de la convention : on renvoie la valeur contenue dans $v0.
            Ce registre est donc considéré comme lu.
            En outre, on suppose que les registres callee-saved sont vivants
-           ici callee-saved = ti de 2 à 9
          *)
-         VSet.union out (VSet.of_list ["$v0"; 
-                                       "$t2"; "$t3"; "$t4"; "$t5"; "$t6"; "$t7"; "$t8"; "$t9"])
+         let out' = RSet.union out (RSet.of_list (Aimp.to_reals Mips.callee_saved)) in
+         RSet.add (Aimp.Real("$v0")) out' 
      | If(r, s1, s2) ->
         (* En sortie du test de la valeur de [r], les blocs [s1] et [s2]
            sont deux futurs possibles. Les variables vivantes dans ces deux
            blocs doivent donc être combinées. *)
-        VSet.add r (VSet.union (sequence s1 out) (sequence s2 out))
+        RSet.add r (RSet.union (sequence s1 out) (sequence s2 out))
      | While(st, r, s) ->
         (* La boucle induit une dépendance circulaire dans les équations
            de vivacité. Cela nécessite de calculer un point fixe à ces
@@ -175,22 +167,22 @@ let nreal r = not (real r)
            en faisant deux fois le calcul. *)
         (* Premier calcul en prenant [out] comme ensemble de sortie *)
         let live_in_body = sequence s out in
-        let live_in_test = sequence st (VSet.add r live_in_body) in
+        let live_in_test = sequence st (RSet.add r live_in_body) in
         (* Deuxième calcul en prenant comme ensemble de sortie ce qui a
            été calculé lors du premier tour. *)
         let live_in_body = sequence s live_in_test in
-        sequence st (VSet.add r live_in_body)
+        sequence st (RSet.add r live_in_body)
    in
         
    (* Pour remplir la table [liveness] d'une fonction, il suffit d'appliquer
       la fonction d'analyse précédente au code de cette fonction. *)
-   ignore(sequence fdef.code VSet.empty);
+   ignore(sequence fdef.code RSet.empty);
    (* Remarque technique caml : [ignore] ne signifie pas que le code n'est
       pas exécuté ! Il s'agit simplement de déclarer que l'on n'utilisera
-      pas le résultat renvoyé par l'appel [sequence fdef.code VSet.empty]
+      pas le résultat renvoyé par l'appel [sequence fdef.code RSet.empty]
       (sans cette déclaration, le compilateur caml émettrait un avertissement).
       À propos de ce résultat qui ne sera pas utilisé : s'il est différent de
-      [VSet.empty], on a risque d'accès à des variables non initialisées. *)
+      [RSet.empty], on a risque d'accès à des variables non initialisées. *)
  
    (* À la fin, on renvoie la table de vivacité *)
    liveness
@@ -233,7 +225,7 @@ let nreal r = not (real r)
    let g = List.fold_left 
              (fun g x -> Graph.add_vertex x g) 
              Graph.empty 
-             fdef.locals
+             (to_virtuals fdef.locals)
    in
    (* La bibliothèque Graph donne une structure immuable. Les fonctions de
       construction du graphe renvoient donc le graphe construit. *)
@@ -265,13 +257,14 @@ let nreal r = not (real r)
      let out = Hashtbl.find live_out n in
      match i with
      | Read(rd, _) | Cst(rd, _) | Unop(rd, _, _) | Binop(rd, _, _, _) ->
-        VSet.fold (fun r g' -> if r <> rd then Graph.add_edge r rd Conflict g' else g') out g
+        RSet.fold (fun r g' -> if r <> rd then Graph.add_edge r rd Conflict g' else g') out g
      | If(_, s1, s2) ->
         seq s1 (seq s2 g)
      | While(s1, _, s2) ->
         seq s1 (seq s2 g)
      | Move(rd, rs) ->
-        VSet.fold (fun r g -> if r <> rd then add_edge r rd Conflict g else g) out g
+        let g' = if conflict rd rs g then g else add_edge rd rs Preference g in
+        RSet.fold (fun r g -> if r <> rd then add_edge r rd Conflict g else g) out g'
      | Putchar _ | Write _ | Return | Push _ | Pop _ -> 
         g
      | Call(_, _) ->
@@ -307,7 +300,12 @@ let nreal r = not (real r)
  
  (* Un coloriage est une association entre des chaînes de caractères
     (les registres virtuesl) et des entiers (les couleurs). *)
- type color = int VMap.t
+ type color = int RMap.t
+
+ 
+let print_colors c =
+  Printf.(printf "Coloration : \n";
+          RMap.iter (fun r rc -> printf "  %s: %i\n" (rname r) rc) c)
  
  (** Fonction auxiliaire pour le choix de la couleur d'un sommet.
      
@@ -318,12 +316,12 @@ let nreal r = not (real r)
      On peut supposer que tous les sommets de [v] ont bien une
      couleur définie dans [colors].
   *)
-let choose_color (v: VSet.t) (colors: color): int =
-  let v_size = VSet.cardinal v in
+let choose_color (v: RSet.t) (colors: color): int =
+  let v_size = RSet.cardinal v in
   (* Array pour vérifier si un sommet est coloré *)
   let color_binded = Array.make (v_size + 1) false in
-  VSet.iter
-    (fun reg -> let c = VMap.find reg colors in
+  RSet.iter
+    (fun reg -> let c = RMap.find reg colors in
                 if c <= v_size then Array.set color_binded c true)
     v
   ;
@@ -331,6 +329,8 @@ let choose_color (v: VSet.t) (colors: color): int =
       | false -> i | true -> find_first (i+1)
   in
   find_first 0
+
+let get_key (key, value) = key 
  
  (** Fonction principale de coloriage.
  
@@ -384,9 +384,11 @@ let color (g: graph) (k: int): color =
       de faible degré.
   *)
   let rec simplify g =
-    match VMap.find_first_opt 
-      (fun x -> nreal x && degree x g < k && not (has_pref x g)) g with
-    | None       -> spill g
+    match RMap.find_first_opt 
+      (fun x -> match x with 
+        | Real _ -> false 
+        | Virtual _ -> degree x g < k && not (has_pref x g)) g with
+    | None       -> coalesce g
     | Some(x, _) -> select x g
  
   (** Recherche de deux sommets à fusionner.
@@ -431,33 +433,39 @@ let color (g: graph) (k: int): color =
         registres.
   *)
   and spill g =
-    (* tri décroissant des registres selon la différence entre le degré et l'utilisation. 
-       Ainsi on favorise les sommets de fort degré mais qui sont peu utilisés. *)
-    match List.sort 
-      (fun r1 r2 -> (degree r1 g) - (degree r2 g)
-        (*((degree r2 g) - (VMap.find r2 reads)) - ((degree r1 g) - (VMap.find r1 reads))*))
-      (VMap.fold (fun r _ l -> if nreal r then l else r::l) g []) with
-    | []   -> VMap.empty 
-    | x::t -> select x g
+    (* On favorise un sommet de fort degré *)
+    try
+      let r = RMap.fold 
+        (fun r rn rselect -> match r, rselect with
+          | Virtual _, Virtual _ -> if degree r g > degree rselect g then r else rselect
+          | Virtual _, Real    _ -> r
+          | Real    _, _         -> rselect) 
+        g (get_key (RMap.choose g))
+      in
+      match r with
+      | Real _ ->
+        (* Cas de base atteint, on color les registres réels *) 
+        RMap.fold 
+          (fun r rn coloring -> 
+            RMap.add r (Tools.index Mips.real_regs (Aimp.rname r)) coloring) 
+          g RMap.empty
+      | Virtual _ -> 
+        select r g
+    with
+    | Not_found -> (* Cas de base sans registres réels *) RMap.empty
  
   (** Mettre de côté un sommet [x] et colorier récursivement le graphe [g']
       ainsi obtenu. À la fin, on choisit une couleur pour [x] compatible
       avec les couleurs sélectionnées pour ses voisins.
   *)
   and select x g =
-    let c = simplify (remove_vertex x g) in
-    let v = VMap.fold
-      (fun r t v -> if real r then v else VSet.add r v) 
-      (VMap.find x g) VSet.empty 
-    in
-    VMap.add x (choose_color v c) c
-    
+    let coloring = simplify (remove_vertex x g) in
+    let v = RMap.fold (fun r rn v -> RSet.add r v) (RMap.find x g) RSet.empty in
+    RMap.add x (choose_color v coloring) coloring
   in
+
   simplify g
- 
-let print_colors c =
-  Printf.(printf "Coloration : \n";
-          VMap.iter (printf "  %s: %i\n") c)
+
  
  (**
     4/ Conclusion
@@ -470,16 +478,8 @@ type register =
   | Actual  of string
   | Stacked of int
   | Param   of int
-
-let rec findi l e =
-  let rec geti l i = match l with
-    | []   -> failwith "ouais non"
-    | h::t when h = e -> i
-    | _::t -> geti l (i+1)
-  in
-  geti l 0
  
-let allocation (fdef: function_def): register Graph.VMap.t * int =
+let allocation (fdef: function_def): register VMap.t * int =
 
   let local r = List.mem r fdef.locals in
   let param r = List.mem r fdef.params in
@@ -491,26 +491,26 @@ let allocation (fdef: function_def): register Graph.VMap.t * int =
       ou un emplacement de pile,
     - le nombre d'emplacements de pile utilisés.
   *)
-  let k = VSet.cardinal real_regs in
+
+  let k, temp_regs = Mips.cp_k_temp_regs (List.length fdef.params) in
+  let kmax = Mips.kmax in
+
   let g = interference_graph fdef in
-  let g = VMap.filter (fun x xn -> not (param x)) g in
-  let c = color g k in
-  print_graph g; print_colors c;
-  
-  let max_k = ref (k - 1) in
-  let affectation = VMap.fold
-    (fun x cx a ->
-      if not (param x) && cx > !max_k then max_k := cx;
-      if param x then
-        let i = findi fdef.params x in
-        VMap.add x (Param i) a
-      else
-        if real x then VMap.add x (Actual x) a
-        else VMap.add x (if cx < k then (Actual (List.nth temp_real_regs cx)) else (Stacked cx)) a
-      ) c VMap.empty
-  in
-  let affectation = List.fold_left (fun alloc x -> let i = findi fdef.params x in Printf.printf "param %s a indexe %i\n" x i;
-                                                 VMap.add x (Param i) alloc) affectation fdef.params
-  in
-  affectation, (if !max_k = (k - 1) then 0 else (!max_k - k))
+  print_graph g;
+  let coloring = color g k in
+  print_colors coloring;
+
+  RMap.fold
+    (fun r rcolor (affectation, nb_stacked) ->
+      match r with
+      | Real    x -> 
+        VMap.add x (Actual x) affectation, nb_stacked
+      | Virtual x -> 
+        if param x then 
+          (VMap.add x (Param (Tools.index fdef.params x)) affectation), nb_stacked
+        else if rcolor >= k then 
+          (VMap.add x (Stacked rcolor) affectation), (nb_stacked+1)
+        else 
+          (VMap.add x (Actual (List.nth Mips.temp_regs rcolor)) affectation), nb_stacked) 
+      coloring (VMap.empty, 0)
  
